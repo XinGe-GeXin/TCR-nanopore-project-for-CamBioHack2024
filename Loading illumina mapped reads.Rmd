@@ -1,0 +1,543 @@
+---
+title: "EXP XG13 sc seq analysis step 1 load separate input h5 files"
+author: Xin_Ge
+date: "5 July 2023"
+output: 
+  html_document:
+    df_print: paged
+    toc: true
+    toc_float: true
+    theme: flatly
+    highlight: kate
+---
+
+```{r setup working directory, setup, include=FALSE}
+
+#setwd for all chunks
+knitr::opts_knit$set(root.dir = '/Users/gexin/Library/CloudStorage/OneDrive-UniversityofCambridge/CamBioHackathon 2024')
+
+```
+
+Loading packages:
+
+```{r load libraries, message=FALSE}
+
+library(Seurat)
+library(tidyverse)
+library(gprofiler2)
+library(sleepwalk)
+library(SCINA)
+library(gridExtra)
+theme_set(theme_bw(base_size = 14))
+
+```
+
+#Loading data
+
+```{r load separate h5 files and create seurat object}
+
+setwd("/Users/gexin/Library/CloudStorage/OneDrive-UniversityofCambridge/CamBioHackathon 2024/Processed data to be loaded in R")
+
+data_dir_1 <- '/Users/gexin/Library/CloudStorage/OneDrive-UniversityofCambridge/CamBioHackathon 2024/Processed data to be loaded in R/de_novo_AML1'
+data_dir_2 <- '/Users/gexin/Library/CloudStorage/OneDrive-UniversityofCambridge/CamBioHackathon 2024/Processed data to be loaded in R/de_novo_AML2'
+data_dir_3 <- '/Users/gexin/Library/CloudStorage/OneDrive-UniversityofCambridge/CamBioHackathon 2024/Processed data to be loaded in R/de_novo_AML3'
+
+AML_1 <- Read10X(
+  data_dir_1,
+  gene.column = 2,
+  cell.column = 1,
+  unique.features = TRUE,
+  strip.suffix = FALSE
+)
+
+AML_2 <- Read10X(
+  data_dir_2,
+  gene.column = 2,
+  cell.column = 1,
+  unique.features = TRUE,
+  strip.suffix = FALSE
+)
+
+AML_3 <- Read10X(
+  data_dir_3,
+  gene.column = 2,
+  cell.column = 1,
+  unique.features = TRUE,
+  strip.suffix = FALSE
+)
+
+```
+
+
+```{r}
+
+seurat_object_AML_1 = CreateSeuratObject(AML_1)
+seurat_object_AML_2 = CreateSeuratObject(AML_2)
+seurat_object_AML_3 = CreateSeuratObject(AML_3)
+
+```
+
+
+```{r}
+
+seurat_object_AML_1$orig.ident = 'AML_1'
+seurat_object_AML_2$orig.ident = 'AML_2'
+seurat_object_AML_3$orig.ident = 'AML_3'
+
+denovo_AML_data <- merge(seurat_object_AML_1, y = c(seurat_object_AML_2, seurat_object_AML_3), project = "AML_merged")
+
+```
+
+```{r cell counts exploration post merge}
+
+as_tibble(denovo_AML_data@meta.data) %>%
+  group_by(orig.ident) %>%
+  summarise(initial_cells=n()) -> cell_counts
+
+cell_counts
+
+```
+
+```{r pull out qc metrics to be included in metadata, warning=FALSE}
+
+PercentageFeatureSet(denovo_AML_data,pattern="^MT-") -> denovo_AML_data$percent_mt
+PercentageFeatureSet(denovo_AML_data,pattern="MALAT1") -> denovo_AML_data$percent_Malat
+apply(denovo_AML_data@assays$RNA@counts, 2, function(x) max((100*x)/sum(x))) -> denovo_AML_data$percent_Largest
+
+denovo_AML_data[[]]
+
+as_tibble(denovo_AML_data@meta.data) -> qc_metrics
+head(qc_metrics)
+
+```
+
+#QC
+
+```{r plot all qc metrics for 4 separate samples, warning=FALSE, fig.height=10, fig.width=8}
+
+
+qc_metrics %>%
+  pivot_longer(cols=-orig.ident, names_to="metric",values_to="value") %>%
+  ggplot(aes(x=orig.ident, y=value)) +
+  geom_violin(fill="lightskyblue")+
+  facet_grid(rows=vars(metric), scales="free_y")
+
+ggsave(paste0("Violin plot linear scale no intercept "
+              , format(Sys.time(), "%Y-%m-%d")
+              , ".pdf"), width = 8, height = 10, dpi = 300)
+
+qc_metrics %>%
+  pivot_longer(cols=-orig.ident, names_to="metric",values_to="value") %>%
+  ggplot(aes(x=orig.ident, y=log(value))) +
+  geom_violin(fill="lightskyblue")+
+  facet_grid(rows=vars(metric), scales="free_y")
+
+ggsave(paste0("Violin plot log scale no intercept "
+              , format(Sys.time(), "%Y-%m-%d")
+              , ".pdf"), width = 8, height = 10, dpi = 300)
+
+```
+
+```{r plot qc metrics and fit cutoff lines, fig.width=8, fig.height=8}
+ 
+qc_metrics %>%
+  ggplot(aes(x=orig.ident, y=log(nFeature_RNA))) +
+  geom_violin(fill="lightskyblue")+
+                geom_hline(yintercept = log(1500))+
+                geom_hline(yintercept = log(8800))
+
+ggsave(paste0("Violin plot log scale yintercept 1000 to 8800 feature "
+              , format(Sys.time(), "%Y-%m-%d")
+              , ".pdf"), width = 8, height = 5, dpi = 300)
+
+qc_metrics %>%
+  ggplot(aes(x=orig.ident, y=log(percent_mt))) +
+  geom_violin(fill="lightskyblue")+
+                geom_hline(yintercept = log(20))
+
+ggsave(paste0("Violin plot log scale yintercept 15 percent_mt "
+              , format(Sys.time(), "%Y-%m-%d")
+              , ".pdf"), width = 8, height = 5, dpi = 300)
+
+qc_metrics %>%
+  ggplot(aes(x=orig.ident, y=log(percent_Largest))) +
+  geom_violin(fill="lightskyblue")+
+                geom_hline(yintercept = log(15))
+
+ggsave(paste0("Violin plot log scale yintercept 20 percent_largest_gene "
+              , format(Sys.time(), "%Y-%m-%d")
+              , ".pdf"), width = 8, height = 5, dpi = 300)
+
+qc_metrics %>%
+  ggplot(aes(x=orig.ident, y=log(percent_Malat))) +
+  geom_violin(fill="lightskyblue")+
+                geom_hline(yintercept = log(20))
+
+ggsave(paste0("Violin plot log scale yintercept 20 percent_Malat "
+              , format(Sys.time(), "%Y-%m-%d")
+              , ".pdf"), width = 8, height = 5, dpi = 300)
+```
+
+
+```{r apply filters}
+
+subset(
+  denovo_AML_data,
+  nFeature_RNA > 1500 & 
+  nFeature_RNA < 8800 &
+  percent_mt < 20 & 
+  percent_Malat < 20 
+) -> denovo_AML_data
+
+denovo_AML_data
+
+```
+
+
+```{r plot qc metrics post QC filtering, warning=FALSE, fig.height=10, fig.width=8}
+
+as_tibble(denovo_AML_data@meta.data) -> qc_metrics_filtered
+
+qc_metrics_filtered %>%
+  pivot_longer(cols=-orig.ident, names_to="metric",values_to="value") %>%
+  ggplot(aes(x=orig.ident, y=value)) +
+  geom_violin(fill="lightskyblue")+
+  facet_grid(rows=vars(metric), scales="free_y")
+
+ggsave(paste0("Violin plot post filtering linear scale no intercept "
+              , format(Sys.time(), "%Y-%m-%d")
+              , ".pdf"), width = 8, height = 10, dpi = 300)
+
+
+qc_metrics_filtered %>%
+  pivot_longer(cols=-orig.ident, names_to="metric",values_to="value") %>%
+  ggplot(aes(x=orig.ident, y=log(value))) +
+  geom_violin(fill="lightskyblue")+
+  facet_grid(rows=vars(metric), scales="free_y")
+
+ggsave(paste0("Violin plot post filtering log scale no intercept "
+              , format(Sys.time(), "%Y-%m-%d")
+              , ".pdf"), width = 8, height = 10, dpi = 300)
+
+```
+
+
+```{r save filtered data}
+
+setwd("/Users/gexin/Library/CloudStorage/OneDrive-UniversityofCambridge/CamBioHackathon 2024")
+
+saveRDS(denovo_AML_data, file="denovo_AML_data_filtered_latest.RDS")
+saveRDS(qc_metrics_filtered, file="denovoAML_qc_metrics_filtered_latest.RDS")
+
+```
+
+#Normalisation
+
+```{r data normalisation with CLR method, message=FALSE, warning=FALSE}
+
+setwd("/Users/gexin/Library/CloudStorage/OneDrive-UniversityofCambridge/CamBioHackathon 2024")
+
+#denovo_AML_data <- readRDS("denovo_AML_data_filtered_latest.RDS")
+#qc_metrics_filtered <- readRDS("denovoAML_qc_metrics_filtered_latest.RDS")
+
+NormalizeData(denovo_AML_data, normalization.method = "CLR") -> denovo_AML_data
+
+saveRDS(denovo_AML_data, file="denovo_AML_data_norm_filtered_latest.RDS")
+
+```
+
+# Post norm check
+
+Then we can check how well the normalisation actually works
+
+```{r post norm check, warning=FALSE, message=FALSE}
+
+setwd("/Users/gexin/Library/CloudStorage/OneDrive-UniversityofCambridge/CamBioHackathon 2024")
+
+#denovo_AML_data <- readRDS("denovo_AML_data_norm_filtered_latest.RDS")
+#qc_metrics_filtered <- readRDS("denovoAML_qc_metrics_filtered_latest.RDS")
+
+subset <- denovo_AML_data@assays$RNA@data[,c(rep(F,69),T)] %>%
+  as_tibble() %>%
+  pivot_longer(
+    cols=everything(),
+    names_to="cell",
+    values_to="value"
+  ) %>%
+  left_join(
+    as_tibble(denovo_AML_data@meta.data, rownames="cell") %>% 
+      dplyr::select(cell,orig.ident)
+  ) 
+
+subset %>%
+  ggplot(aes(x=value, colour=orig.ident, group=cell)) +
+  geom_density(linewidth=0.25)+
+  coord_cartesian(xlim=c(0,3), ylim=c(0,1)) +
+  scale_colour_brewer(palette = "Set1")
+
+ggsave(paste0("Post norm check all samples together "
+              , format(Sys.time(), "%Y-%m-%d")
+              , ".pdf"), width = 8, height = 5, dpi = 300)
+
+subset %>%
+  ggplot(aes(x=value, colour=orig.ident, group=cell)) +
+  geom_density(linewidth=0.25)+
+  coord_cartesian(xlim=c(0,3), ylim=c(0,1)) +
+  scale_colour_brewer(palette = "Set1") +
+  facet_wrap(vars(orig.ident))
+
+ggsave(paste0("Post norm check 4 samples separate "
+              , format(Sys.time(), "%Y-%m-%d")
+              , ".pdf"), width = 8, height = 5, dpi = 300)
+
+```
+
+```{r}
+
+setwd("/Users/gexin/Library/CloudStorage/OneDrive-UniversityofCambridge/CamBioHackathon 2024")
+
+#denovo_AML_data <- readRDS("denovo_AML_data_norm_filtered_latest.RDS")
+#qc_metrics_filtered <- readRDS("denovoAML_qc_metrics_filtered_latest.RDS")
+
+
+```
+
+
+```{r find variable genes}
+
+FindVariableFeatures(
+  denovo_AML_data,
+  selection.method = "vst",
+  nfeatures = 500
+) -> denovo_AML_data
+
+as_tibble(HVFInfo(denovo_AML_data),rownames = "Gene") -> variance.data
+
+variance.data %>% 
+  mutate(hypervariable=Gene %in% VariableFeatures(denovo_AML_data)
+) -> variance.data
+
+variance.data %>%
+  arrange(desc(variance.standardized)) -> variance.data
+
+head(variance.data,n=100)
+
+```
+
+# Plot variable genes
+
+```{r plot variable genes}
+
+setwd("/Users/gexin/Library/CloudStorage/OneDrive-UniversityofCambridge/CamBioHackathon 2024")
+
+variance.data %>%
+  arrange(hypervariable) %>%
+  ggplot(aes(x=mean,y=variance, colour=hypervariable)) +
+  geom_point() +
+  scale_y_log10() +
+  scale_x_log10() +
+  scale_colour_manual(values=c("grey","red2"))
+
+ggsave(paste0("HVG gene plot "
+              , format(Sys.time(), "%Y-%m-%d")
+              , ".pdf"), width = 8, height = 5, dpi = 300)
+
+```
+
+```{r generate gene list to be pasted for GO}
+
+#Extract gene list for GO analysis
+#https://www.bioinformatics.babraham.ac.uk/goliath/goliath.cgi
+
+variance.data %>%
+  arrange(desc(variance.standardized)) %>%
+  slice(1:100) %>%
+  pull(Gene) %>%
+  sapply(function(x)cat(paste0(x,"\n"))) -> temp
+
+```
+
+Save variable gene and generated gene list
+
+```{r save variable gene and generated gene list}
+
+setwd("/Users/gexin/Library/CloudStorage/OneDrive-UniversityofCambridge/CamBioHackathon 2024")
+
+saveRDS(variance.data, file="variable_genes_latest.RDS")
+saveRDS(temp, file="variable_genes_list_for_GO_latest.RDS")
+
+```
+
+
+A bit of data exploration:
+
+```{r}
+
+qc_metrics_filtered %>%
+  pivot_longer(cols=-orig.ident, names_to="metric",values_to="value") %>%
+  ggplot(aes(x=orig.ident, y=value)) +
+  geom_violin(fill="lightskyblue")+
+  facet_grid(rows=vars(metric), scales="free_y")
+
+
+```
+
+## Dim red with PCA using var genes
+
+```{r dimensionality reduction with PCA}
+
+setwd("/Users/gexin/Library/CloudStorage/OneDrive-UniversityofCambridge/CamBioHackathon 2024")
+
+ScaleData(denovo_AML_data, features=rownames(data)) -> denovo_AML_data
+
+RunPCA(
+  denovo_AML_data,
+  features=VariableFeatures(denovo_AML_data)
+) -> denovo_AML_data
+
+PCAPlot(denovo_AML_data, dims=c(1,2), group.by= 'orig.ident')
+ggsave(paste0("PCA dim 1&2 "
+              , format(Sys.time(), "%Y-%m-%d")
+              , ".pdf"), width = 8, height = 6, dpi = 300)
+
+
+PCAPlot(denovo_AML_data, dims=c(3,4), group.by= 'orig.ident')
+ggsave(paste0("PCA dim 3&4 "
+              , format(Sys.time(), "%Y-%m-%d")
+              , ".pdf"), width = 8, height = 6, dpi = 300)
+
+
+PCAPlot(denovo_AML_data, dims=c(5,6), group.by= 'orig.ident')
+ggsave(paste0("PCA dim 5&6 "
+              , format(Sys.time(), "%Y-%m-%d")
+              , ".pdf"), width = 8, height = 6, dpi = 300)
+
+
+PCAPlot(denovo_AML_data, dims=c(7,8), group.by= 'orig.ident')
+ggsave(paste0("PCA dim 7&8 "
+              , format(Sys.time(), "%Y-%m-%d")
+              , ".pdf"), width = 8, height = 6, dpi = 300)
+
+
+PCAPlot(denovo_AML_data, dims=c(9,10), group.by= 'orig.ident')
+ggsave(paste0("PCA dim 9&10 "
+              , format(Sys.time(), "%Y-%m-%d")
+              , ".pdf"), width = 8, height = 6, dpi = 300)
+
+
+ElbowPlot(denovo_AML_data, ndims=40)
+ggsave(paste0("PCA SD vs dim "
+              , format(Sys.time(), "%Y-%m-%d")
+              , ".pdf"), width = 8, height = 5, dpi = 300)
+
+```
+
+```{r}
+
+Idents(denovo_AML_data) <- 'orig.ident'
+
+```
+
+
+```{r UMAP nneighbour=50 min dist=1, fig.width=10, fig.height=10}
+
+setwd("/Users/gexin/Library/CloudStorage/OneDrive-UniversityofCambridge/CamBioHackathon 2024")
+
+saved.seed <- 5540
+set.seed(saved.seed)
+
+RunUMAP(
+  denovo_AML_data,
+  dims=1:30,
+  n.neighbors = 50,
+  min.dist = 1,
+  seed.use = saved.seed
+) -> denovo_AML_data
+
+DimPlot(denovo_AML_data,reduction = "umap", pt.size = 0.3)
+ggsave(paste0("UMAP all samples "
+              , format(Sys.time(), "%Y-%m-%d")
+              , ".pdf"), width = 8, height = 8, dpi = 300)
+
+
+DimPlot(denovo_AML_data,reduction = "umap", pt.size = 0.3, split.by = "orig.ident", ncol = 2)
+ggsave(paste0("UMAP 3 samples separate "
+              , format(Sys.time(), "%Y-%m-%d")
+              , ".pdf"), width = 12, height = 10, dpi = 300)
+
+```
+
+As AML3 seems completely off, we are removing it from the dataset for further analysis
+
+(Below is trying to do batch correction but harmony somehow cannot be downloaded)
+
+```{r eval=FALSE, include=FALSE}
+
+library(harmony)
+
+# Perform Harmony integration
+denovo_AML_data_batchcorr <- denovo_AML_data %>%
+    RunHarmony("batch_variable")  # "batch_variable" is the column in metadata indicating batch information
+
+# Project into Harmony space
+denovo_AML_data_batchcorr <- RunUMAP(denovo_AML_data_bathcorr, reduction = "harmony", dims = 1:30)
+
+```
+
+
+```{r}
+
+denovo_AML_data_no3 <- subset(denovo_AML_data, subset = orig.ident != "AML_3")
+
+```
+
+```{r}
+
+setwd("/Users/gexin/Library/CloudStorage/OneDrive-UniversityofCambridge/CamBioHackathon 2024")
+
+DimPlot(denovo_AML_data_no3,reduction = "umap", pt.size = 0.3)
+ggsave(paste0("UMAP 2 samples "
+              , format(Sys.time(), "%Y-%m-%d")
+              , ".pdf"), width = 8, height = 8, dpi = 300)
+
+
+DimPlot(denovo_AML_data_no3,reduction = "umap", pt.size = 0.3, split.by = "orig.ident", ncol = 2)
+ggsave(paste0("UMAP 2 samples separate "
+              , format(Sys.time(), "%Y-%m-%d")
+              , ".pdf"), width = 12, height = 10, dpi = 300)
+
+
+```
+# Generating SNN Clusters
+
+```{r find neighbours and clusters using PC 1-30}
+
+FindNeighbors(denovo_AML_data_no3, reduction = "pca", dims = 1:30) -> denovo_AML_data_no3
+
+denovo_AML_data_no3@graphs$RNA_snn[1:10,1:10]
+
+FindClusters(denovo_AML_data_no3, resolution = 0.1) -> denovo_AML_data_no3
+
+head(denovo_AML_data_no3$seurat_clusters, n=50)
+
+```
+
+# Plot clusters on UMAP
+
+```{r plot SNN cluster on UMAP}
+
+setwd("/Users/gexin/Library/CloudStorage/OneDrive-UniversityofCambridge/CamBioHackathon 2024")
+
+DimPlot(denovo_AML_data_no3,reduction = "umap", pt.size = 0.3, label = TRUE, label.size = 8)
+ggsave(paste0("UMAP 2 samples with SNN clusters resolution 0.1 "
+              , format(Sys.time(), "%Y-%m-%d")
+              , ".pdf"), width = 8, height = 8, dpi = 300)
+
+DimPlot(denovo_AML_data_no3,reduction = "umap", pt.size = 0.3, label = TRUE, label.size = 4, split.by = "orig.ident", ncol = 2) 
+ggsave(paste0("UMAP 2 samples separate with SNN clusters resolution 0.1 "
+              , format(Sys.time(), "%Y-%m-%d")
+              , ".pdf"), width = 12, height = 10, dpi = 300)
+
+```
+
+
