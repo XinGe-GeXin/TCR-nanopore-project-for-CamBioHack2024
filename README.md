@@ -8,3 +8,5 @@ For the first day of the Hackathon we are just going to replicated their analysi
 Xin will lead the Illumina analysis and Shutong will lead the Nanopore analysis, after which data will be integrated into R by Xin. Teru can choose to join either branch of the project.
 
 [Google doc for data resources](https://docs.google.com/document/d/1o6SMYqVzAk-8GaBZFU5klaJo8ysTxeJxoI3rnc0dqw0/edit?usp=sharing)
+
+We are now focusing on the session: "Detection of natural genetic barcodes by ONT sequencing: efficiency and limitations" in the above paper.
