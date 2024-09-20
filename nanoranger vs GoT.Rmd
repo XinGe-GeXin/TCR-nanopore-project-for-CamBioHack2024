@@ -1,0 +1,356 @@
+---
+title: "Nanoranger vs GoT comparison"
+author: Xin_Ge
+date: "20 Sep 2024"
+output: 
+  html_document:
+    df_print: paged
+    toc: true
+    toc_float: true
+    theme: flatly
+    highlight: kate
+---
+
+
+```{r setup working directory, setup, include=FALSE}
+
+#setwd for all chunks
+knitr::opts_knit$set(root.dir = '/Users/gexin/Library/CloudStorage/OneDrive-UniversityofCambridge/CamBioHackathon_2024')
+
+```
+
+Loading packages:
+
+```{r load libraries, message=FALSE}
+
+library(Seurat)
+library(tidyverse)
+library(gprofiler2)
+library(sleepwalk)
+library(SCINA)
+library(gridExtra)
+theme_set(theme_bw(base_size = 14))
+
+```
+
+#Loading data
+
+```{r load separate h5 files and create seurat object}
+
+setwd("/Users/gexin/Library/CloudStorage/OneDrive-UniversityofCambridge/CamBioHackathon_2024/Processed data to be loaded in R")
+
+data_dir_GoT <- '/Users/gexin/Library/CloudStorage/OneDrive-UniversityofCambridge/CamBioHackathon_2024/Processed data to be loaded in R/AML1022.1_GoT'
+data_dir_nanoranger <- '/Users/gexin/Library/CloudStorage/OneDrive-UniversityofCambridge/CamBioHackathon_2024/Processed data to be loaded in R/AML1022.1_nanoranger'
+
+
+AML_GoT <- Read10X(
+  data_dir_GoT,
+  gene.column = 2,
+  cell.column = 1,
+  unique.features = TRUE,
+  strip.suffix = FALSE
+)
+
+AML_nanoranger <- Read10X(
+  data_dir_nanoranger,
+  gene.column = 2,
+  cell.column = 1,
+  unique.features = TRUE,
+  strip.suffix = FALSE
+)
+
+
+```
+
+
+```{r}
+
+seurat_object_AML_GoT = CreateSeuratObject(AML_GoT)
+seurat_object_AML_nanoranger = CreateSeuratObject(AML_nanoranger)
+
+
+```
+
+
+```{r}
+
+seurat_object_AML_GoT$orig.ident = 'AML_GoT'
+seurat_object_AML_nanoranger$orig.ident = 'AML_nanoranger'
+
+
+AML_merged <- merge(seurat_object_AML_GoT, y = seurat_object_AML_nanoranger, project = "AML_merged")
+
+```
+
+```{r cell counts exploration post merge}
+
+as_tibble(AML_merged@meta.data) %>%
+  group_by(orig.ident) %>%
+  summarise(initial_cells=n()) -> cell_counts
+
+cell_counts
+
+```
+
+```{r pull out qc metrics to be included in metadata, warning=FALSE}
+
+PercentageFeatureSet(AML_merged,pattern="^MT-") -> AML_merged$percent_mt
+PercentageFeatureSet(AML_merged,pattern="MALAT1") -> AML_merged$percent_Malat
+apply(AML_merged@assays$RNA@counts, 2, function(x) max((100*x)/sum(x))) -> AML_merged$percent_Largest
+
+AML_merged[[]]
+
+as_tibble(AML_merged@meta.data) -> qc_metrics
+head(qc_metrics)
+
+```
+
+
+```{r plot all qc metrics for 4 separate samples, warning=FALSE, fig.height=7, fig.width=6}
+
+
+qc_metrics %>%
+  pivot_longer(cols=-orig.ident, names_to="metric",values_to="value") %>%
+  ggplot(aes(x=orig.ident, y=value)) +
+  geom_violin(fill="lightskyblue")+
+  facet_grid(rows=vars(metric), scales="free_y")
+
+ggsave(paste0("Violin plot linear scale no intercept "
+              , format(Sys.time(), "%Y-%m-%d")
+              , ".pdf"), width = 8, height = 10, dpi = 300)
+
+qc_metrics %>%
+  pivot_longer(cols=-orig.ident, names_to="metric",values_to="value") %>%
+  ggplot(aes(x=orig.ident, y=log(value))) +
+  geom_violin(fill="lightskyblue")+
+  facet_grid(rows=vars(metric), scales="free_y")
+
+ggsave(paste0("Violin plot log scale no intercept "
+              , format(Sys.time(), "%Y-%m-%d")
+              , ".pdf"), width = 8, height = 10, dpi = 300)
+
+```
+
+
+```{r data normalisation with CLR method, message=FALSE, warning=FALSE}
+
+setwd("/Users/gexin/Library/CloudStorage/OneDrive-UniversityofCambridge/CamBioHackathon_2024")
+
+NormalizeData(AML_merged, normalization.method = "CLR") -> AML_merged
+
+saveRDS(AML_merged, file="AML_merged_norm_latest.RDS")
+
+```
+
+
+```{r post norm check, warning=FALSE, message=FALSE}
+
+setwd("/Users/gexin/Library/CloudStorage/OneDrive-UniversityofCambridge/CamBioHackathon_2024")
+
+
+subset <- AML_merged@assays$RNA@data[,c(rep(F,69),T)] %>%
+  as_tibble() %>%
+  pivot_longer(
+    cols=everything(),
+    names_to="cell",
+    values_to="value"
+  ) %>%
+  left_join(
+    as_tibble(AML_merged@meta.data, rownames="cell") %>% 
+      dplyr::select(cell,orig.ident)
+  ) 
+
+subset %>%
+  ggplot(aes(x=value, colour=orig.ident, group=cell)) +
+  geom_density(linewidth=0.25)+
+  coord_cartesian(xlim=c(0,3), ylim=c(0,1)) +
+  scale_colour_brewer(palette = "Set1")
+
+ggsave(paste0("Post norm check all samples together "
+              , format(Sys.time(), "%Y-%m-%d")
+              , ".pdf"), width = 8, height = 5, dpi = 300)
+
+subset %>%
+  ggplot(aes(x=value, colour=orig.ident, group=cell)) +
+  geom_density(linewidth=0.25)+
+  coord_cartesian(xlim=c(0,3), ylim=c(0,1)) +
+  scale_colour_brewer(palette = "Set1") +
+  facet_wrap(vars(orig.ident))
+
+ggsave(paste0("Post norm check 4 samples separate "
+              , format(Sys.time(), "%Y-%m-%d")
+              , ".pdf"), width = 8, height = 5, dpi = 300)
+
+```
+
+```{r find variable genes}
+
+FindVariableFeatures(
+  AML_merged,
+  selection.method = "vst",
+  nfeatures = 500
+) -> AML_merged
+
+as_tibble(HVFInfo(AML_merged),rownames = "Gene") -> variance.data
+
+variance.data %>% 
+  mutate(hypervariable=Gene %in% VariableFeatures(AML_merged)
+) -> variance.data
+
+variance.data %>%
+  arrange(desc(variance.standardized)) -> variance.data
+
+head(variance.data,n=100)
+
+```
+
+# Plot variable genes
+
+```{r plot variable genes}
+
+setwd("/Users/gexin/Library/CloudStorage/OneDrive-UniversityofCambridge/CamBioHackathon_2024")
+
+variance.data %>%
+  arrange(hypervariable) %>%
+  ggplot(aes(x=mean,y=variance, colour=hypervariable)) +
+  geom_point() +
+  scale_y_log10() +
+  scale_x_log10() +
+  scale_colour_manual(values=c("grey","red2"))
+
+ggsave(paste0("HVG gene plot "
+              , format(Sys.time(), "%Y-%m-%d")
+              , ".pdf"), width = 8, height = 5, dpi = 300)
+
+```
+
+```{r generate gene list to be pasted for GO}
+
+#Extract gene list for GO analysis
+#https://www.bioinformatics.babraham.ac.uk/goliath/goliath.cgi
+
+variance.data %>%
+  arrange(desc(variance.standardized)) %>%
+  slice(1:100) %>%
+  pull(Gene) %>%
+  sapply(function(x)cat(paste0(x,"\n"))) -> temp
+
+```
+# Dim red with PCA using var genes
+
+```{r dimensionality reduction with PCA}
+
+setwd("/Users/gexin/Library/CloudStorage/OneDrive-UniversityofCambridge/CamBioHackathon_2024")
+
+ScaleData(AML_merged, features=rownames(data)) -> AML_merged
+
+RunPCA(
+  AML_merged,
+  features=VariableFeatures(AML_merged)
+) -> AML_merged
+
+PCAPlot(AML_merged, dims=c(1,2), group.by= 'orig.ident')
+ggsave(paste0("PCA dim 1&2 "
+              , format(Sys.time(), "%Y-%m-%d")
+              , ".pdf"), width = 8, height = 6, dpi = 300)
+
+
+PCAPlot(AML_merged, dims=c(3,4), group.by= 'orig.ident')
+ggsave(paste0("PCA dim 3&4 "
+              , format(Sys.time(), "%Y-%m-%d")
+              , ".pdf"), width = 8, height = 6, dpi = 300)
+
+
+PCAPlot(AML_merged, dims=c(5,6), group.by= 'orig.ident')
+ggsave(paste0("PCA dim 5&6 "
+              , format(Sys.time(), "%Y-%m-%d")
+              , ".pdf"), width = 8, height = 6, dpi = 300)
+
+
+PCAPlot(AML_merged, dims=c(7,8), group.by= 'orig.ident')
+ggsave(paste0("PCA dim 7&8 "
+              , format(Sys.time(), "%Y-%m-%d")
+              , ".pdf"), width = 8, height = 6, dpi = 300)
+
+
+PCAPlot(AML_merged, dims=c(9,10), group.by= 'orig.ident')
+ggsave(paste0("PCA dim 9&10 "
+              , format(Sys.time(), "%Y-%m-%d")
+              , ".pdf"), width = 8, height = 6, dpi = 300)
+
+
+ElbowPlot(AML_merged, ndims=40)
+ggsave(paste0("PCA SD vs dim "
+              , format(Sys.time(), "%Y-%m-%d")
+              , ".pdf"), width = 8, height = 5, dpi = 300)
+
+```
+
+
+```{r}
+
+Idents(AML_merged) <- 'orig.ident'
+
+```
+
+```{r UMAP nneighbour 50 min dist 1, fig.width=10, fig.height=10}
+
+setwd("/Users/gexin/Library/CloudStorage/OneDrive-UniversityofCambridge/CamBioHackathon_2024")
+
+saved.seed <- 5540
+set.seed(saved.seed)
+
+RunUMAP(
+  AML_merged,
+  dims=1:30,
+  n.neighbors = 50,
+  min.dist = 1,
+  seed.use = saved.seed
+) -> AML_merged
+
+DimPlot(AML_merged,reduction = "umap", pt.size = 0.3)
+ggsave(paste0("UMAP all samples "
+              , format(Sys.time(), "%Y-%m-%d")
+              , ".pdf"), width = 8, height = 8, dpi = 300)
+
+
+DimPlot(AML_merged,reduction = "umap", pt.size = 0.3, split.by = "orig.ident", ncol = 2)
+ggsave(paste0("UMAP 3 samples separate "
+              , format(Sys.time(), "%Y-%m-%d")
+              , ".pdf"), width = 12, height = 10, dpi = 300)
+
+```
+
+# Generating SNN Clusters
+
+```{r find neighbours and clusters using PC 1-30}
+
+FindNeighbors(AML_merged, reduction = "pca", dims = 1:30) -> AML_merged
+
+AML_merged@graphs$RNA_snn[1:10,1:10]
+
+FindClusters(AML_merged, resolution = 0.1) -> AML_merged
+
+head(AML_merged$seurat_clusters, n=50)
+
+```
+
+# Plot clusters on UMAP
+
+```{r plot SNN cluster on UMAP}
+
+setwd("/Users/gexin/Library/CloudStorage/OneDrive-UniversityofCambridge/CamBioHackathon_2024")
+
+DimPlot(AML_merged,reduction = "umap", pt.size = 0.3, label = TRUE, label.size = 8)
+ggsave(paste0("UMAP 2 samples with SNN clusters resolution 0.1 "
+              , format(Sys.time(), "%Y-%m-%d")
+              , ".pdf"), width = 8, height = 8, dpi = 300)
+
+DimPlot(AML_merged,reduction = "umap", pt.size = 0.3, label = TRUE, label.size = 4, split.by = "orig.ident", ncol = 2) 
+ggsave(paste0("UMAP 2 samples separate with SNN clusters resolution 0.1 "
+              , format(Sys.time(), "%Y-%m-%d")
+              , ".pdf"), width = 12, height = 10, dpi = 300)
+
+```
+
+
